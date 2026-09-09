@@ -2,7 +2,16 @@ import { z } from 'zod'
 import { uuid, optionalStr, money, isoDateStr } from './common'
 
 const CATEGORY_IDS = ['mo', 'log', 'mat', 'rep', 'ins'] as const
-const STATUSES = ['Borrador', 'Emitida', 'Enviada', 'Perdida', 'Adjudicada', 'Anulada'] as const
+const STATUSES = [
+  'Borrador',
+  'Emitida',
+  'En revisión',
+  'Enviada',
+  'Perdida',
+  'Adjudicada',
+  'Anulada',
+  'Cerrada',
+] as const
 const OPER_STATES = ['Pendiente de ejecución', 'En ejecución', 'Terminada'] as const
 const TERM_TYPES = ['scope', 'exclusion', 'commercial'] as const
 const KINDS = ['project', 'maintenance'] as const
@@ -84,4 +93,76 @@ export const quotationStatusSchema = z.object({
 
 export const quotationDuplicateSchema = z.object({
   correlative: z.string().trim().min(1).max(50),
+})
+
+// Configuración de cuántas facturas puede generar una cotización Adjudicada.
+export const quotationBillingSplitSchema = z.object({
+  invoice_count_max: z.coerce.number().int().min(1).max(2),
+})
+
+// Motivo de pérdida (obligatorio al marcar 'Perdida')
+const LOSS_REASONS = [
+  'precio',
+  'competidor',
+  'sin_presupuesto',
+  'timing',
+  'no_ejecutado',
+  'otro',
+] as const
+export const quotationLossSchema = z.object({
+  loss_reason: z.enum(LOSS_REASONS),
+  loss_competitor: optionalStr(200),
+  loss_notes: optionalStr(2000),
+})
+
+// Fecha de próximo seguimiento
+export const quotationFollowUpSchema = z.object({
+  follow_up_date: isoDateStr.nullish(),
+})
+
+// Hito de facturación
+export const quotationMilestoneSchema = z.object({
+  invoice_number: z.coerce.number().int().min(1).max(2),
+  description: z.string().trim().min(1).max(1000),
+  pct_of_total: z.coerce.number().min(0).max(100).nullish(),
+})
+
+// Actividad en el log
+const ACTIVITY_TYPES = ['llamada', 'reunion', 'correo', 'nota_interna', 'otro'] as const
+export const quotationActivitySchema = z.object({
+  activity_type: z.enum(ACTIVITY_TYPES).default('nota_interna'),
+  content: z.string().trim().min(1).max(5000),
+})
+
+// Motivo de versión (obligatorio al crear V+)
+export const quotationVersionReasonSchema = z.object({
+  correlative: z.string().trim().min(1).max(50),
+  version_reason: z.string().trim().min(1).max(500),
+})
+
+// Aprobación interna
+export const quotationApprovalSchema = z.object({
+  approval_notes: optionalStr(2000),
+})
+
+// OC (Orden de Compra) u otro medio de aceptación formal del cliente. Todo
+// opcional: la OC nunca bloquea el guardado ni el paso a 'Adjudicada', solo
+// registra el dato cuando el usuario lo tenga.
+export const quotationOcSchema = z.object({
+  oc_number: optionalStr(100),
+  oc_date: isoDateStr.nullish(),
+  oc_conditions: optionalStr(5000),
+})
+
+// Upload del documento de OC. El campo data es el contenido base64 del
+// archivo; el backend lo decodifica y lo almacena como BYTEA (mismo patrón
+// que invoiceDocumentSchema para el PDF SII).
+export const quotationOcDocumentSchema = z.object({
+  data: z.string().min(1),
+  name: z.string().trim().min(1).max(255),
+  size: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10 * 1024 * 1024),
 })

@@ -10,6 +10,12 @@ import type {
   MasterQuotation,
   CostCategory,
   CostItem,
+  InvoiceMilestone,
+  QuotationActivity,
+  AgingTramo,
+  CarteraData,
+  CycleTimes,
+  MarginAnalysisRow,
 } from '../types'
 
 // ── Base URL ──────────────────────────────────────────────────
@@ -28,8 +34,8 @@ const clearAuth = () => {
 // (conflicto de versión) de un error genérico de red/servidor.
 export class ApiError extends Error {
   status: number
-  data?: any
-  constructor(status: number, message: string, data?: any) {
+  data?: unknown
+  constructor(status: number, message: string, data?: unknown) {
     super(message)
     this.status = status
     this.data = data
@@ -244,6 +250,27 @@ function toMasterQuotation(q: any): MasterQuotation {
     usd: Number(q.usd_value) || 0,
     show_uf_equivalent: Boolean(q.show_uf_equivalent),
     show_usd_equivalent: Boolean(q.show_usd_equivalent),
+    invoice_count: Number(q.invoice_count) || 0,
+    invoice_count_max: Number(q.invoice_count_max) || 1,
+    total_con_iva: Number(q.total_con_iva) || 0,
+    invoiced_total: Number(q.invoiced_total) || 0,
+    oc_number: q.oc_number ?? null,
+    oc_date: q.oc_date ?? null,
+    oc_conditions: q.oc_conditions ?? null,
+    oc_document_name: q.oc_document_name ?? null,
+    oc_document_size: q.oc_document_size ?? null,
+    loss_reason: q.loss_reason ?? null,
+    loss_competitor: q.loss_competitor ?? null,
+    loss_notes: q.loss_notes ?? null,
+    follow_up_date: q.follow_up_date ?? null,
+    sent_at: q.sent_at ?? null,
+    awarded_at: q.awarded_at ?? null,
+    closed_at: q.closed_at ?? null,
+    version_reason: q.version_reason ?? null,
+    parent_version_id: q.parent_version_id ?? null,
+    approved_by: q.approved_by ?? null,
+    approved_at: q.approved_at ?? null,
+    approval_notes: q.approval_notes ?? null,
   }
 }
 
@@ -260,6 +287,7 @@ function fromMasterQuotation(q: MasterQuotation) {
   const line_items: any[] = []
   for (const cid of Object.keys(q.items) as CategoryId[]) {
     q.items[cid].forEach((item, idx) => {
+      if (!item.desc?.trim()) return // omite filas sin descripción (fallarían min(1))
       line_items.push({
         id: item.id,
         category_id: cid,
@@ -274,9 +302,15 @@ function fromMasterQuotation(q: MasterQuotation) {
   }
 
   const terms: any[] = [
-    ...q.scope.map((c, i) => ({ term_type: 'scope', content: c, sort_order: i })),
-    ...q.exclusions.map((c, i) => ({ term_type: 'exclusion', content: c, sort_order: i })),
-    ...q.commercial.map((c, i) => ({ term_type: 'commercial', content: c, sort_order: i })),
+    ...q.scope
+      .filter(c => c?.trim())
+      .map((c, i) => ({ term_type: 'scope', content: c, sort_order: i })),
+    ...q.exclusions
+      .filter(c => c?.trim())
+      .map((c, i) => ({ term_type: 'exclusion', content: c, sort_order: i })),
+    ...q.commercial
+      .filter(c => c?.trim())
+      .map((c, i) => ({ term_type: 'commercial', content: c, sort_order: i })),
   ]
 
   return {
@@ -320,6 +354,121 @@ export interface ImportQuotationReport {
 export interface ImportQuotationResult {
   quotation: MasterQuotation
   reporte_importacion: ImportQuotationReport
+}
+
+// ── Facturas ──────────────────────────────────────────────────
+// Espejo del payment_state calculado por v_invoice_balance (ver
+// backend/src/api/invoices.ts).
+export type InvoicePaymentState =
+  'al_dia' | 'por_vencer' | 'vencida' | 'parcial' | 'parcial_vencida' | 'pagada' | 'anulada'
+
+export interface Invoice {
+  id: string
+  // null = "Pendiente" (folio real del SII aún no ingresado a mano). El
+  // texto "Pendiente N° X" es solo una etiqueta de UI, no se guarda así.
+  number: string | null
+  status: 'draft' | 'issued' | 'paid' | 'cancelled'
+  client_id: string
+  client_name: string | null
+  quotation_id: string | null
+  quotation_correlative: string | null
+  date: string
+  due_date: string | null
+  payment_term: string
+  doc_type: string
+  total_amount: string | number
+  paid_amount: string | number | null
+  balance: string | number | null
+  days_overdue: number | null
+  payment_state: InvoicePaymentState | null
+  observations: string | null
+  follow_up_date: string | null
+  is_factored: boolean
+  factoring_company: string | null
+  factoring_type: string | null
+  sii_document_name: string | null
+  sii_document_size: number | null
+}
+
+export interface InvoicePayment {
+  id: string
+  paid_at: string
+  amount: string | number
+  method: string
+  reference: string | null
+  observations: string | null
+  created_by_name: string | null
+}
+
+export interface InvoiceFactoring {
+  id: string
+  company: string
+  type: string | null
+  status: string
+  ceded_at: string | null
+  advance_amount: string | number
+  rate_pct: string | number | null
+  cost_amount: string | number
+  expected_settle_at: string | null
+  settled_at: string | null
+  observations: string | null
+}
+
+export interface InvoiceDetail extends Invoice {
+  items: unknown[]
+  payments: InvoicePayment[]
+  factoring: InvoiceFactoring | null
+}
+
+export interface InvoiceSummary {
+  by_state: Partial<Record<InvoicePaymentState, { count: number; balance: number }>>
+  total_outstanding: number
+}
+
+export interface InvoiceCreatePayload {
+  project_id?: string | null
+  quotation_id?: string | null
+  client_id: string
+  number?: string
+  date: string
+  payment_term?: string | null
+  due_date?: string | null
+  doc_type?: string
+  items: Array<{ description: string; quantity: number; unit_price: number }>
+}
+
+export interface InvoiceFollowUpPayload {
+  number?: string | null
+  observations: string | null
+  follow_up_date: string | null
+  due_date?: string | null
+  payment_term?: string | null
+}
+
+export interface InvoiceStatusPayload {
+  status: string
+  is_factored?: boolean | null
+}
+
+export interface InvoicePaymentPayload {
+  amount: number
+  method: string | null
+  paid_at: string
+  reference: string | null
+  observations?: string | null
+}
+
+export interface InvoiceFactoringPayload {
+  type: string | null
+  company: string
+  ceded_at?: string | null
+  advance_amount?: number
+  rate_pct?: number | null
+  cost_amount?: number
+  expected_settle_at?: string | null
+  settled_at?: string | null
+  status?: string | null
+  observations?: string | null
 }
 
 // ── API pública ───────────────────────────────────────────────
@@ -508,8 +657,197 @@ export const api = {
   deleteTask: (projectId: string, taskId: string) =>
     del<any>(`/api/projects/${projectId}/tasks/${taskId}`),
 
+  // ── Facturas ────────────────────────────────────────────────
+  // El saldo y el estado de cobranza vienen calculados desde
+  // v_invoice_balance: el front nunca los recalcula ni los guarda.
+  getInvoices: (params?: { state?: string; client_id?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.state) qs.set('state', params.state)
+    if (params?.client_id) qs.set('client_id', params.client_id)
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return get<Invoice[]>(`/api/invoices${suffix}`)
+  },
+  getInvoice: (id: string) => get<InvoiceDetail>(`/api/invoices/${id}`),
+  getInvoiceSummary: () => get<InvoiceSummary>('/api/invoices/summary'),
+  createInvoice: (data: InvoiceCreatePayload) => post<Invoice>('/api/invoices', data),
+  updateInvoiceFollowUp: (id: string, data: InvoiceFollowUpPayload) =>
+    patch<Invoice>(`/api/invoices/${id}/follow-up`, data),
+  updateInvoiceStatus: (id: string, data: InvoiceStatusPayload) =>
+    patch<Invoice>(`/api/invoices/${id}/status`, data),
+  deleteInvoice: (id: string) => del<{ success: boolean }>(`/api/invoices/${id}`),
+
+  getPayments: (invoiceId: string) => get<InvoicePayment[]>(`/api/invoices/${invoiceId}/payments`),
+  addPayment: (invoiceId: string, data: InvoicePaymentPayload) =>
+    post<InvoicePayment>(`/api/invoices/${invoiceId}/payments`, data),
+  deletePayment: (paymentId: string) =>
+    del<{ success: boolean }>(`/api/invoices/payments/${paymentId}`),
+
+  saveFactoring: (invoiceId: string, data: InvoiceFactoringPayload) =>
+    put<Invoice>(`/api/invoices/${invoiceId}/factoring`, data),
+  deleteFactoring: (invoiceId: string) =>
+    del<{ success: boolean }>(`/api/invoices/${invoiceId}/factoring`),
+
+  // Sube el PDF SII de una factura. Convierte el File a base64 JSON para no
+  // necesitar multipart (sin dependencias adicionales en el backend).
+  uploadInvoiceDocument: (id: string, file: File): Promise<Invoice> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = async () => {
+        try {
+          const base64 = (reader.result as string).split(',')[1]
+          resolve(
+            await post<Invoice>(`/api/invoices/${id}/document`, {
+              data: base64,
+              name: file.name,
+              size: file.size,
+            })
+          )
+        } catch (e) {
+          reject(e)
+        }
+      }
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo'))
+      reader.readAsDataURL(file)
+    }),
+
+  // Descarga el PDF SII y lo dispara como descarga del navegador.
+  downloadInvoiceDocument: async (id: string): Promise<void> => {
+    const token = localStorage.getItem('authToken')
+    const res = await fetch(`/api/invoices/${id}/document`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error('No se pudo descargar el documento')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download =
+      res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] ?? 'documento.pdf'
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  // Igual que downloadInvoiceDocument pero devuelve el Blob en vez de
+  // disparar la descarga — lo usa el modal de vista previa inline.
+  getInvoiceDocumentBlob: async (id: string): Promise<Blob> => {
+    const token = localStorage.getItem('authToken')
+    const res = await fetch(`/api/invoices/${id}/document`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error('No se pudo cargar el documento')
+    return res.blob()
+  },
+
+  // Configura cuántas facturas puede emitir una cotización Adjudicada (1 o 2).
+  updateQuotationBillingSplit: (id: string, invoice_count_max: number) =>
+    patch<{ id: string; invoice_count_max: number }>(`/api/quotations/${id}/billing-split`, {
+      invoice_count_max,
+    }),
+
+  // ── OC (Orden de Compra) / aceptación del cliente ────────────────────────────
+  updateQuotationOc: (
+    id: string,
+    data: { oc_number?: string | null; oc_date?: string | null; oc_conditions?: string | null }
+  ) =>
+    patch<{
+      id: string
+      oc_number: string | null
+      oc_date: string | null
+      oc_conditions: string | null
+    }>(`/api/quotations/${id}/oc`, data),
+
+  // Sube el documento de OC. Mismo patrón que uploadInvoiceDocument (base64,
+  // sin multipart).
+  uploadQuotationOcDocument: (
+    id: string,
+    file: File
+  ): Promise<{ id: string; oc_document_name: string | null }> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = async () => {
+        try {
+          const base64 = (reader.result as string).split(',')[1]
+          resolve(
+            await post<{ id: string; oc_document_name: string | null }>(
+              `/api/quotations/${id}/oc-document`,
+              {
+                data: base64,
+                name: file.name,
+                size: file.size,
+              }
+            )
+          )
+        } catch (e) {
+          reject(e)
+        }
+      }
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo'))
+      reader.readAsDataURL(file)
+    }),
+
+  // Descarga el documento de OC y lo dispara como descarga del navegador.
+  downloadQuotationOcDocument: async (id: string): Promise<void> => {
+    const token = localStorage.getItem('authToken')
+    const res = await fetch(`/api/quotations/${id}/oc-document`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error('No se pudo descargar el documento')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] ?? 'oc.pdf'
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  // ── Pérdida ─────────────────────────────────────────────────────────────────
+  updateQuotationLoss: (
+    id: string,
+    data: { loss_reason: string; loss_competitor?: string | null; loss_notes?: string | null }
+  ) => patch<{ id: string }>(`/api/quotations/${id}/loss`, data),
+
+  // ── Seguimiento ──────────────────────────────────────────────────────────────
+  updateFollowUpDate: (id: string, follow_up_date: string | null) =>
+    patch<{ id: string; follow_up_date: string | null }>(`/api/quotations/${id}/follow-up`, {
+      follow_up_date,
+    }),
+
+  // ── Milestones ───────────────────────────────────────────────────────────────
+  getMilestones: (id: string) =>
+    get<{ milestones: InvoiceMilestone[] }>(`/api/quotations/${id}/milestones`),
+  saveMilestone: (
+    id: string,
+    invoiceNumber: 1 | 2,
+    data: { description: string; pct_of_total?: number | null }
+  ) => put<InvoiceMilestone>(`/api/quotations/${id}/milestones/${invoiceNumber}`, data),
+  deleteMilestone: (id: string, invoiceNumber: 1 | 2) =>
+    del<{ ok: boolean }>(`/api/quotations/${id}/milestones/${invoiceNumber}`),
+
+  // ── Actividades ───────────────────────────────────────────────────────────────
+  getActivities: (id: string) =>
+    get<{ activities: QuotationActivity[] }>(`/api/quotations/${id}/activities`),
+  createActivity: (id: string, data: { activity_type: string; content: string }) =>
+    post<QuotationActivity>(`/api/quotations/${id}/activities`, data),
+  deleteActivity: (activityId: string) => del<{ ok: boolean }>(`/api/activities/${activityId}`),
+
+  // ── Version diff ─────────────────────────────────────────────────────────────
+  getVersionDiff: (id: string) => get<{ versions: any[] }>(`/api/quotations/${id}/version-diff`),
+
+  // ── Aprobación ────────────────────────────────────────────────────────────────
+  approveQuotation: (id: string, approval_notes?: string | null) =>
+    post<{ id: string; status: string; approved_at: string }>(`/api/quotations/${id}/approve`, {
+      approval_notes,
+    }),
+
   // ── Dashboard ───────────────────────────────────────────────
-  getKPIs: () => get<any>('/api/dashboard/kpis'),
+  getKPIs: () => get<Record<string, unknown>>('/api/dashboard/kpis'),
+  getAging: () => get<{ aging: AgingTramo[]; timestamp: string }>('/api/dashboard/aging'),
+  getCartera: () => get<{ cartera: CarteraData; timestamp: string }>('/api/dashboard/cartera'),
+  getCycleTimes: () =>
+    get<{ cycle_times: CycleTimes; timestamp: string }>('/api/dashboard/cycle-times'),
+  getMarginAnalysis: () =>
+    get<{ analysis: MarginAnalysisRow[]; timestamp: string }>('/api/dashboard/margin-analysis'),
 }
 
 export default api

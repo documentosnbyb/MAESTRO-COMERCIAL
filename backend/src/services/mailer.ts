@@ -1,3 +1,4 @@
+import nodemailer, { Transporter } from 'nodemailer'
 import { logger } from '../utils/logger'
 
 export interface SendEmailInput {
@@ -48,11 +49,54 @@ class ResendMailer implements Mailer {
         logger.error('Mailer: proveedor respondió error', { status: res.status, body })
         return { ok: false, error: `provider_${res.status}` }
       }
-      const data: any = await res.json()
+      const data = (await res.json()) as { id?: string }
       return { ok: true, providerId: data?.id }
-    } catch (error: any) {
-      logger.error('Mailer: fallo de red al enviar', { error: error.message })
-      return { ok: false, error: error.message }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.error('Mailer: fallo de red al enviar', { error: message })
+      return { ok: false, error: message }
+    }
+  }
+}
+
+// Alternativa a Resend para cuando no hay un dominio propio verificado:
+// manda por el SMTP de una cuenta de Gmail ya existente (con contraseña de
+// aplicación, nunca la contraseña real de la cuenta). Sin dominio propio,
+// Resend solo puede entregar a la casilla dueña del API key — inútil para
+// un flujo de reset que le llega a cualquier usuario.
+class SmtpMailer implements Mailer {
+  private transporter: Transporter
+
+  constructor(
+    host: string,
+    port: number,
+    secure: boolean,
+    user: string,
+    password: string,
+    private from: string
+  ) {
+    this.transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass: password },
+    })
+  }
+
+  async send(input: SendEmailInput): Promise<SendEmailResult> {
+    try {
+      const info = await this.transporter.sendMail({
+        from: this.from,
+        to: input.to,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+      })
+      return { ok: true, providerId: info.messageId }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.error('Mailer: fallo SMTP al enviar', { error: message })
+      return { ok: false, error: message }
     }
   }
 }
@@ -75,6 +119,22 @@ let mailer: Mailer | null = null
 
 export function getMailer(): Mailer {
   if (mailer) return mailer
+
+  const smtpUser = process.env.SMTP_USER
+  const smtpPassword = process.env.SMTP_PASSWORD
+  if (smtpUser && smtpPassword) {
+    const port = Number(process.env.SMTP_PORT || 465)
+    mailer = new SmtpMailer(
+      process.env.SMTP_HOST || 'smtp.gmail.com',
+      port,
+      process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
+      smtpUser,
+      smtpPassword,
+      process.env.MAIL_FROM || smtpUser
+    )
+    return mailer
+  }
+
   const apiKey = process.env.RESEND_API_KEY
   const from = process.env.MAIL_FROM
   mailer = apiKey && from ? new ResendMailer(apiKey, from) : new NoopMailer()

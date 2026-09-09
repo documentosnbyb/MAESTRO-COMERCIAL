@@ -5,9 +5,6 @@ import { useMaestro } from './stores/maestro-store'
 import { useProjects } from './stores/projects-store'
 import { api } from './api/api'
 
-// A-16: cada página (y lo que solo ella importa — recharts, jspdf, html2canvas,
-// docx) queda fuera del chunk inicial. Solo se descarga cuando el usuario
-// realmente navega ahí, no en la carga de /login.
 const Quotations = lazy(() => import('./pages/Quotations'))
 const Maintenance = lazy(() => import('./pages/Maintenance'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -15,11 +12,67 @@ const Clients = lazy(() => import('./pages/Clients'))
 const Catalogo = lazy(() => import('./pages/Catalogo'))
 const Projects = lazy(() => import('./pages/Projects'))
 const Logistica = lazy(() => import('./pages/Logistica'))
+const Invoices = lazy(() => import('./pages/Invoices'))
 
 function PageLoading() {
   return <div className="page-placeholder">Cargando…</div>
 }
 
+// ── Theme ──────────────────────────────────────────────────────────
+type Theme = 'dark' | 'light' | 'cyberpunk'
+
+function useTheme() {
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const saved = (localStorage.getItem('mc-theme') as Theme) || 'dark'
+    // Aplicar sincrónicamente para evitar flash
+    document.documentElement.setAttribute('data-theme', saved)
+    return saved
+  })
+
+  const setTheme = (t: Theme) => {
+    document.documentElement.setAttribute('data-theme', t)
+    localStorage.setItem('mc-theme', t)
+    setThemeState(t)
+  }
+
+  return { theme, setTheme }
+}
+
+function ThemeToggle({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+  return (
+    <div className="theme-toggle" role="group" aria-label="Seleccionar tema">
+      <button
+        type="button"
+        className={`theme-btn${theme === 'light' ? ' active' : ''}`}
+        onClick={() => setTheme('light')}
+        title="Tema claro"
+        aria-pressed={theme === 'light'}
+      >
+        ☀
+      </button>
+      <button
+        type="button"
+        className={`theme-btn${theme === 'dark' ? ' active' : ''}`}
+        onClick={() => setTheme('dark')}
+        title="Tema oscuro"
+        aria-pressed={theme === 'dark'}
+      >
+        ◑
+      </button>
+      <button
+        type="button"
+        className={`theme-btn${theme === 'cyberpunk' ? ' active' : ''}`}
+        onClick={() => setTheme('cyberpunk')}
+        title="Tema cyberpunk"
+        aria-pressed={theme === 'cyberpunk'}
+      >
+        ⚡
+      </button>
+    </div>
+  )
+}
+
+// ── Sync Button ────────────────────────────────────────────────────
 type SyncPhase = 'idle' | 'syncing' | 'done' | 'error'
 
 function NavSyncButton() {
@@ -136,6 +189,7 @@ function NavSyncButton() {
   )
 }
 
+// ── App ────────────────────────────────────────────────────────────
 type Page =
   | 'dashboard'
   | 'quotations'
@@ -149,7 +203,9 @@ type Page =
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [currentPage, setCurrentPage] = useState<Page>('dashboard')
+  const [invoicesQuotationId, setInvoicesQuotationId] = useState<string | undefined>(undefined)
   const [user, setUser] = useState<any>(null)
+  const { theme, setTheme } = useTheme()
   const loadData = useMaestro(s => s.loadData)
   const criticalCount = useProjects(s => s.criticalCount)
 
@@ -173,7 +229,7 @@ function App() {
   }
 
   const handleLogout = () => {
-    api.logout() // revoca la sesión en el backend; no bloquea el logout local si falla
+    api.logout()
     setIsAuthenticated(false)
     setUser(null)
     setCurrentPage('dashboard')
@@ -184,7 +240,7 @@ function App() {
   }
 
   const nav = (page: Page) => setCurrentPage(page)
-  const cls = (page: Page) => `nav-btn ${currentPage === page ? 'active' : ''}`
+  const cls = (page: Page) => `nav-btn${currentPage === page ? ' active' : ''}`
 
   return (
     <div className="app-container authenticated">
@@ -223,6 +279,7 @@ function App() {
 
         <div className="header-right">
           <NavSyncButton />
+          <ThemeToggle theme={theme} setTheme={setTheme} />
           <div className="user-info">
             <span className="user-name">{user?.name || 'Usuario'}</span>
             <span className={`user-role ${user?.role || 'user'}`}>{user?.role || 'user'}</span>
@@ -237,15 +294,31 @@ function App() {
         <Suspense fallback={<PageLoading />}>
           {currentPage === 'dashboard' && <Dashboard />}
           {currentPage === 'quotations' && (
-            <Quotations onNavigateToMaintenance={() => nav('maintenance')} />
+            <Quotations
+              onNavigateToMaintenance={() => nav('maintenance')}
+              onNavigateToInvoices={qid => {
+                setInvoicesQuotationId(qid)
+                nav('invoices')
+              }}
+            />
           )}
-          {currentPage === 'maintenance' && <Maintenance />}
+          {currentPage === 'maintenance' && (
+            <Maintenance
+              onNavigateToInvoices={qid => {
+                setInvoicesQuotationId(qid)
+                nav('invoices')
+              }}
+            />
+          )}
           {currentPage === 'clients' && <Clients />}
           {currentPage === 'catalogo' && <Catalogo />}
           {currentPage === 'projects' && <Projects />}
           {currentPage === 'logistica' && <Logistica />}
           {currentPage === 'invoices' && (
-            <div className="page-placeholder">Módulo de Facturas — Próximamente</div>
+            <Invoices
+              initialQuotationId={invoicesQuotationId}
+              onConsumeQuotationId={() => setInvoicesQuotationId(undefined)}
+            />
           )}
         </Suspense>
       </main>

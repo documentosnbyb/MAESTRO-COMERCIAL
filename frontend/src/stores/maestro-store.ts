@@ -291,7 +291,7 @@ interface MaestroState {
 
   // active session
   activeId: string | null
-  activeTab: 'base' | 'costeo' | 'coti'
+  activeTab: 'base' | 'costeo' | 'coti' | 'actividad'
   unsaved: boolean
 
   // ── API sync
@@ -316,6 +316,19 @@ interface MaestroState {
   deleteQuote: (id: string) => Promise<void>
   setStatus: (id: string, s: QuoteStatus) => Promise<void>
   setOperState: (id: string, s: OperState) => Promise<void>
+  // Refleja localmente que se generó una factura para una cotización, sin
+  // esperar un refetch completo (ver botón "generar factura" en Quotations/Maintenance).
+  applyInvoiceCreated: (quotationId: string, totalAmount: number) => void
+  // Refleja localmente los datos de OC recién guardados (ver OcModal).
+  applyOcUpdate: (
+    quotationId: string,
+    data: {
+      oc_number: string | null
+      oc_date: string | null
+      oc_conditions: string | null
+      oc_document_name?: string | null
+    }
+  ) => void
   importQuotations: (qs: MasterQuotation[]) => void
   importQuotation: (payload: unknown) => Promise<ImportQuotationResult>
 
@@ -349,7 +362,7 @@ interface MaestroState {
   saveCatalogs: () => Promise<void>
 
   // UI
-  setTab: (t: 'base' | 'costeo' | 'coti') => void
+  setTab: (t: 'base' | 'costeo' | 'coti' | 'actividad') => void
   markSaved: () => void
 }
 
@@ -588,6 +601,27 @@ export const useMaestro = create<MaestroState>()(
           usd,
           show_uf_equivalent: false,
           show_usd_equivalent: false,
+          invoice_count: 0,
+          invoice_count_max: 1,
+          total_con_iva: 0,
+          invoiced_total: 0,
+          oc_number: null,
+          oc_date: null,
+          oc_conditions: null,
+          oc_document_name: null,
+          oc_document_size: null,
+          loss_reason: null,
+          loss_competitor: null,
+          loss_notes: null,
+          follow_up_date: null,
+          sent_at: null,
+          awarded_at: null,
+          closed_at: null,
+          version_reason: null,
+          parent_version_id: null,
+          approved_by: null,
+          approved_at: null,
+          approval_notes: null,
         }
         set(s => ({
           quotations: [...s.quotations, draft],
@@ -655,6 +689,39 @@ export const useMaestro = create<MaestroState>()(
         } catch {
           /* offline */
         }
+      },
+
+      applyInvoiceCreated: (quotationId, totalAmount) => {
+        set(s => ({
+          quotations: s.quotations.map(q =>
+            q.id === quotationId
+              ? {
+                  ...q,
+                  invoice_count: (q.invoice_count || 0) + 1,
+                  invoiced_total: (q.invoiced_total || 0) + totalAmount,
+                }
+              : q
+          ),
+        }))
+      },
+
+      applyOcUpdate: (quotationId, data) => {
+        set(s => ({
+          quotations: s.quotations.map(q =>
+            q.id === quotationId
+              ? {
+                  ...q,
+                  oc_number: data.oc_number,
+                  oc_date: data.oc_date,
+                  oc_conditions: data.oc_conditions,
+                  oc_document_name:
+                    data.oc_document_name !== undefined
+                      ? data.oc_document_name
+                      : q.oc_document_name,
+                }
+              : q
+          ),
+        }))
       },
 
       setOperState: async (id, operState) => {
